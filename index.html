@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <title>バイクナビ</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -80,10 +79,7 @@
             min-width: 64px;
         }
 
-        #searchBtn:disabled {
-            background: #555;
-            cursor: not-allowed;
-        }
+        #searchBtn:disabled { background: #555; cursor: not-allowed; }
 
         #instruction {
             display: none;
@@ -99,15 +95,31 @@
         #instruction.show { display: flex; }
 
         #arrow { font-size: 26px; flex-shrink: 0; }
-
         #instrText { flex: 1; line-height: 1.4; }
-
         #dist { font-size: 12px; color: #aaa; flex-shrink: 0; }
 
-        #stopBtn {
+        .nav-btns {
             display: none;
-            width: 100%;
+            gap: 8px;
             margin-top: 8px;
+        }
+
+        .nav-btns.show { display: flex; }
+
+        #pauseBtn {
+            flex: 1;
+            padding: 10px;
+            background: #e9a020;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+
+        #stopBtn {
+            flex: 1;
             padding: 10px;
             background: #444;
             color: #fff;
@@ -152,52 +164,62 @@
         <span id="instrText">案内を開始します</span>
         <span id="dist"></span>
     </div>
-    <button id="stopBtn" onclick="stopNavigation()">■ ナビ停止</button>
+    <div class="nav-btns" id="navBtns">
+        <button id="pauseBtn" onclick="togglePause()">⏸ 一時停止</button>
+        <button id="stopBtn" onclick="stopNavigation()">■ 停止</button>
+    </div>
 </div>
 
 <div id="map"></div>
 <div id="toast"></div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 
-// ===== ここにAPIキーを貼り付けてください =====
-const API_KEY = '85f7b37d-5162-4a2f-891a-04f56bc8909e';
-// =============================================
+// ===== APIキーをここに設定 =====
+const YAHOO_CLIENT_ID = 'dmVyPTIwMjUwNyZpZD1lZElmMmNHZjl3Jmhhc2g9Tm1NeE9URTRaakU0TkdGbE16Y3hNQQ'; // Yahoo!のClient IDに書き換える
+const GRAPHHOPPER_KEY = '85f7b37d-5162-4a2f-891a-04f56bc8909e';
+// ================================
 
-let map, userMarker, destMarker, routeLine;
+let ymap, userMarker, destMarker, routePolyline;
 let currentCC = 999;
 let watchId = null;
-let steps = [];
-let routePoints = [];
+let steps = [], routePoints = [];
 let currentStepIndex = 0;
 let userLat = null, userLng = null;
-let navigating = false;
+let navigating = false, paused = false;
+let stopSigns = [];
 
-// 地図初期化
-map = L.map('map', { zoomControl: true }).setView([35.6812, 139.7671], 13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap contributors',
-    maxZoom: 19
-}).addTo(map);
-
-// 現在地取得
-if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition(
-        pos => {
-            userLat = pos.coords.latitude;
-            userLng = pos.coords.longitude;
-            map.setView([userLat, userLng], 15);
-            userMarker = L.circleMarker([userLat, userLng], {
-                radius: 10, color: '#fff', weight: 3,
-                fillColor: '#e94560', fillOpacity: 1
-            }).addTo(map);
-        },
-        () => showToast('現在地の取得に失敗しました。位置情報を許可してください。')
-    );
-} else {
-    showToast('このブラウザは位置情報に対応していません');
+// Yahoo!地図を動的に読み込んで初期化
+function loadYahooMaps() {
+    return new Promise(resolve => {
+        const s = document.createElement('script');
+        s.src = `https://map.yahooapis.jp/js/V1/S=256/jsapi?appid=${YAHOO_CLIENT_ID}`;
+        s.onload = resolve;
+        document.head.appendChild(s);
+    });
 }
+
+async function init() {
+    await loadYahooMaps();
+
+    ymap = new Y.Map('map');
+    ymap.drawMap(new Y.LatLng(35.6812, 139.7671), 15, Y.Type.NORMAL);
+
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            pos => {
+                userLat = pos.coords.latitude;
+                userLng = pos.coords.longitude;
+                ymap.drawMap(new Y.LatLng(userLat, userLng), 15, Y.Type.NORMAL);
+                userMarker = new Y.Marker(new Y.LatLng(userLat, userLng), { label: '現在地' });
+                ymap.addFeature(userMarker);
+            },
+            () => showToast('現在地の取得に失敗しました。位置情報を許可してください。')
+        );
+    }
+}
+
+init();
 
 function selectCC(btn) {
     document.querySelectorAll('.cc-btn').forEach(b => b.classList.remove('active'));
@@ -206,11 +228,9 @@ function selectCC(btn) {
 }
 
 function getRouteParams() {
-    if (currentCC <= 125) {
-        return { vehicle: 'car', avoid: 'motorway,trunk' };
-    } else {
-        return { vehicle: 'car', avoid: '' };
-    }
+    return currentCC <= 125
+        ? { vehicle: 'car', avoid: 'motorway,trunk' }
+        : { vehicle: 'car', avoid: '' };
 }
 
 async function startNavigation() {
@@ -223,11 +243,9 @@ async function startNavigation() {
     btn.textContent = '…';
 
     try {
-        // ジオコーディング（住所→座標）
         const destCoords = await geocode(dest);
-
-        // ルート計算
         const { vehicle, avoid } = getRouteParams();
+
         let url = `https://graphhopper.com/api/1/route`
             + `?point=${userLat},${userLng}`
             + `&point=${destCoords.lat},${destCoords.lng}`
@@ -236,48 +254,53 @@ async function startNavigation() {
             + `&instructions=true`
             + `&calc_points=true`
             + `&points_encoded=true`
-            + `&key=${API_KEY}`;
+            + `&turn_costs=true`
+            + `&ch.disable=true`
+            + `&key=${GRAPHHOPPER_KEY}`;
         if (avoid) url += `&avoid=${avoid}`;
 
         const res = await fetch(url);
         const data = await res.json();
 
-        if (!data.paths || data.paths.length === 0) {
-            throw new Error('ルートが見つかりませんでした');
-        }
+        if (!data.paths || data.paths.length === 0) throw new Error('ルートが見つかりませんでした');
 
         const path = data.paths[0];
         routePoints = decodePolyline(path.points);
 
-        // 各ステップに座標を付与
         steps = path.instructions.map(step => ({
             text: step.text,
             sign: step.sign,
             lat: routePoints[step.interval[0]][0],
             lng: routePoints[step.interval[0]][1],
-            distanceToNext: step.distance
         }));
 
         currentStepIndex = 0;
         navigating = true;
+        paused = false;
 
         // ルート描画
-        if (routeLine) map.removeLayer(routeLine);
-        routeLine = L.polyline(routePoints, { color: '#e94560', weight: 6, opacity: 0.85 }).addTo(map);
+        if (routePolyline) ymap.removeFeature(routePolyline);
+        const yPoints = routePoints.map(p => new Y.LatLng(p[0], p[1]));
+        routePolyline = new Y.Polyline(yPoints, { strokeColor: '#e94560', strokeWidth: 6, strokeOpacity: 0.85 });
+        ymap.addFeature(routePolyline);
 
         // 目的地マーカー
-        if (destMarker) map.removeLayer(destMarker);
-        destMarker = L.marker([destCoords.lat, destCoords.lng]).addTo(map).bindPopup(dest).openPopup();
+        if (destMarker) ymap.removeFeature(destMarker);
+        destMarker = new Y.Marker(new Y.LatLng(destCoords.lat, destCoords.lng), { label: dest });
+        ymap.addFeature(destMarker);
 
-        map.fitBounds(routeLine.getBounds(), { padding: [60, 60] });
+        ymap.drawMap(new Y.LatLng(userLat, userLng), 16, Y.Type.NORMAL);
 
-        // UI表示
         document.getElementById('instruction').classList.add('show');
-        document.getElementById('stopBtn').style.display = 'block';
+        document.getElementById('navBtns').classList.add('show');
         showStep(0);
         speak(steps[0].text);
 
-        // GPS追跡開始
+        // 一時停止標識取得
+        const lats = routePoints.map(p => p[0]);
+        const lngs = routePoints.map(p => p[1]);
+        fetchStopSigns(Math.min(...lats), Math.min(...lngs), Math.max(...lats), Math.max(...lngs));
+
         if (watchId) navigator.geolocation.clearWatch(watchId);
         watchId = navigator.geolocation.watchPosition(updatePosition, null, {
             enableHighAccuracy: true, maximumAge: 2000, timeout: 10000
@@ -299,23 +322,18 @@ function updatePosition(pos) {
     userLat = pos.coords.latitude;
     userLng = pos.coords.longitude;
 
-    if (userMarker) {
-        userMarker.setLatLng([userLat, userLng]);
-    }
+    if (userMarker) ymap.removeFeature(userMarker);
+    userMarker = new Y.Marker(new Y.LatLng(userLat, userLng), { label: '現在地' });
+    ymap.addFeature(userMarker);
 
-    if (!navigating || steps.length === 0) return;
+    if (!navigating || paused || steps.length === 0) return;
 
-    map.panTo([userLat, userLng]);
+    ymap.panTo(new Y.LatLng(userLat, userLng));
 
-    // 次のステップに近づいたら案内を進める
     if (currentStepIndex < steps.length - 1) {
         const next = steps[currentStepIndex + 1];
         const dist = getDistance(userLat, userLng, next.lat, next.lng);
-
-        // 距離表示
-        document.getElementById('dist').textContent = dist < 1000
-            ? `${Math.round(dist)}m`
-            : `${(dist / 1000).toFixed(1)}km`;
+        document.getElementById('dist').textContent = dist < 1000 ? `${Math.round(dist)}m` : `${(dist / 1000).toFixed(1)}km`;
 
         if (dist < 40) {
             currentStepIndex++;
@@ -324,11 +342,20 @@ function updatePosition(pos) {
         }
     }
 
+    // 一時停止標識チェック
+    stopSigns.forEach(s => {
+        const d = getDistance(userLat, userLng, s.lat, s.lng);
+        if (d < 80 && !s.announced) {
+            s.announced = true;
+            speak('この先、一時停止があります');
+        }
+        if (d > 150 && s.announced) s.announced = false;
+    });
+
     // 目的地到着判定
     if (currentStepIndex === steps.length - 1) {
-        const lastStep = steps[steps.length - 1];
-        const distToGoal = getDistance(userLat, userLng, lastStep.lat, lastStep.lng);
-        if (distToGoal < 30) {
+        const last = steps[steps.length - 1];
+        if (getDistance(userLat, userLng, last.lat, last.lng) < 30) {
             speak('目的地に到着しました');
             showToast('目的地に到着しました');
             stopNavigation();
@@ -345,34 +372,67 @@ function showStep(index) {
 }
 
 function signToArrow(sign) {
-    const map = {
-        '-7': '↰', '-3': '↰', '-2': '↖', '-1': '↗',
-        '0': '↑', '1': '↗', '2': '↘', '3': '↱', '4': '↑',
-        '5': '🏁', '6': '↑', '7': '↑'
-    };
-    return map[String(sign)] || '↑';
+    const m = { '-7': '↰', '-3': '↰', '-2': '↖', '-1': '↗', '0': '↑', '1': '↗', '2': '↘', '3': '↱', '4': '↑', '5': '🏁', '6': '↑', '7': '↑' };
+    return m[String(sign)] || '↑';
+}
+
+function togglePause() {
+    paused = !paused;
+    const btn = document.getElementById('pauseBtn');
+    if (paused) {
+        btn.textContent = '▶ 再開';
+        btn.style.background = '#20a020';
+        document.getElementById('instrText').textContent = '一時停止中';
+        document.getElementById('arrow').textContent = '⏸';
+        window.speechSynthesis.cancel();
+    } else {
+        btn.textContent = '⏸ 一時停止';
+        btn.style.background = '#e9a020';
+        showStep(currentStepIndex);
+        speak(steps[currentStepIndex].text);
+    }
 }
 
 function stopNavigation() {
     navigating = false;
+    paused = false;
     if (watchId) { navigator.geolocation.clearWatch(watchId); watchId = null; }
-    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
-    if (destMarker) { map.removeLayer(destMarker); destMarker = null; }
+    if (routePolyline) { ymap.removeFeature(routePolyline); routePolyline = null; }
+    if (destMarker) { ymap.removeFeature(destMarker); destMarker = null; }
     steps = [];
+    stopSigns = [];
     currentStepIndex = 0;
     document.getElementById('instruction').classList.remove('show');
-    document.getElementById('stopBtn').style.display = 'none';
+    document.getElementById('navBtns').classList.remove('show');
+    document.getElementById('pauseBtn').textContent = '⏸ 一時停止';
+    document.getElementById('pauseBtn').style.background = '#e9a020';
     document.getElementById('destination').value = '';
 }
 
+// Yahoo!ジオコーダAPI（日本の住所に強い）
 async function geocode(address) {
-    const url = `https://graphhopper.com/api/1/geocode?q=${encodeURIComponent(address)}&locale=ja&limit=1&key=${API_KEY}`;
+    const url = `https://map.yahooapis.jp/geocode/V1/geoCoder`
+        + `?appid=${YAHOO_CLIENT_ID}`
+        + `&query=${encodeURIComponent(address)}`
+        + `&output=json`
+        + `&results=1`;
     const res = await fetch(url);
     const data = await res.json();
-    if (data.hits && data.hits.length > 0) {
-        return { lat: data.hits[0].point.lat, lng: data.hits[0].point.lng };
+    if (data.Feature && data.Feature.length > 0) {
+        const [lng, lat] = data.Feature[0].Geometry.Coordinates.split(',').map(Number);
+        return { lat, lng };
     }
     throw new Error(`「${address}」が見つかりませんでした`);
+}
+
+async function fetchStopSigns(south, west, north, east) {
+    const query = `[out:json][timeout:25];node["highway"~"stop|give_way"](${south},${west},${north},${east});out body;`;
+    const url = `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`;
+    try {
+        const res = await fetch(url);
+        const data = await res.json();
+        stopSigns = data.elements.map(e => ({ lat: e.lat, lng: e.lon, announced: false }));
+    } catch(e) {}
 }
 
 function speak(text) {
@@ -388,9 +448,7 @@ function getDistance(lat1, lng1, lat2, lng2) {
     const R = 6371000;
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLng = (lng2 - lng1) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) ** 2
-        + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180)
-        * Math.sin(dLng / 2) ** 2;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
