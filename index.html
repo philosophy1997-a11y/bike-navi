@@ -146,6 +146,7 @@
             white-space: nowrap;
         }
     </style>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 </head>
 <body>
 
@@ -173,6 +174,7 @@
 <div id="map"></div>
 <div id="toast"></div>
 
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 
 // ===== APIキーをここに設定 =====
@@ -180,7 +182,7 @@ const YAHOO_CLIENT_ID = 'dmVyPTIwMjUwNyZpZD1lZElmMmNHZjl3Jmhhc2g9Tm1NeE9URTRaakU
 const GRAPHHOPPER_KEY = '85f7b37d-5162-4a2f-891a-04f56bc8909e';
 // ================================
 
-let ymap, userMarker, destMarker, routePolyline;
+let lmap, userMarker, destMarker, routePolyline;
 let currentCC = 999;
 let watchId = null;
 let steps = [], routePoints = [];
@@ -189,37 +191,25 @@ let userLat = null, userLng = null;
 let navigating = false, paused = false;
 let stopSigns = [];
 
-// Yahoo!地図を動的に読み込んで初期化
-function loadYahooMaps() {
-    return new Promise(resolve => {
-        const s = document.createElement('script');
-        s.src = `https://map.yahooapis.jp/js/V1/S=256/jsapi?appid=${YAHOO_CLIENT_ID}`;
-        s.onload = resolve;
-        document.head.appendChild(s);
-    });
+// Leafletで地図初期化
+lmap = L.map('map', { zoomControl: true }).setView([35.6812, 139.7671], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors', maxZoom: 19
+}).addTo(lmap);
+
+if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+        pos => {
+            userLat = pos.coords.latitude;
+            userLng = pos.coords.longitude;
+            lmap.setView([userLat, userLng], 15);
+            userMarker = L.circleMarker([userLat, userLng], {
+                radius: 10, color: '#fff', weight: 3, fillColor: '#e94560', fillOpacity: 1
+            }).addTo(lmap);
+        },
+        () => showToast('現在地の取得に失敗しました。位置情報を許可してください。')
+    );
 }
-
-async function init() {
-    await loadYahooMaps();
-
-    ymap = new Y.Map('map');
-    ymap.drawMap(new Y.LatLng(35.6812, 139.7671), 15, Y.Type.NORMAL);
-
-    if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-            pos => {
-                userLat = pos.coords.latitude;
-                userLng = pos.coords.longitude;
-                ymap.drawMap(new Y.LatLng(userLat, userLng), 15, Y.Type.NORMAL);
-                userMarker = new Y.Marker(new Y.LatLng(userLat, userLng), { label: '現在地' });
-                ymap.addFeature(userMarker);
-            },
-            () => showToast('現在地の取得に失敗しました。位置情報を許可してください。')
-        );
-    }
-}
-
-init();
 
 function selectCC(btn) {
     document.querySelectorAll('.cc-btn').forEach(b => b.classList.remove('active'));
@@ -279,17 +269,14 @@ async function startNavigation() {
         paused = false;
 
         // ルート描画
-        if (routePolyline) ymap.removeFeature(routePolyline);
-        const yPoints = routePoints.map(p => new Y.LatLng(p[0], p[1]));
-        routePolyline = new Y.Polyline(yPoints, { strokeColor: '#e94560', strokeWidth: 6, strokeOpacity: 0.85 });
-        ymap.addFeature(routePolyline);
+        if (routePolyline) lmap.removeLayer(routePolyline);
+        routePolyline = L.polyline(routePoints, { color: '#e94560', weight: 6, opacity: 0.85 }).addTo(lmap);
 
         // 目的地マーカー
-        if (destMarker) ymap.removeFeature(destMarker);
-        destMarker = new Y.Marker(new Y.LatLng(destCoords.lat, destCoords.lng), { label: dest });
-        ymap.addFeature(destMarker);
+        if (destMarker) lmap.removeLayer(destMarker);
+        destMarker = L.marker([destCoords.lat, destCoords.lng]).addTo(lmap).bindPopup(dest).openPopup();
 
-        ymap.drawMap(new Y.LatLng(userLat, userLng), 16, Y.Type.NORMAL);
+        lmap.fitBounds(routePolyline.getBounds(), { padding: [60, 60] });
 
         document.getElementById('instruction').classList.add('show');
         document.getElementById('navBtns').classList.add('show');
@@ -322,13 +309,11 @@ function updatePosition(pos) {
     userLat = pos.coords.latitude;
     userLng = pos.coords.longitude;
 
-    if (userMarker) ymap.removeFeature(userMarker);
-    userMarker = new Y.Marker(new Y.LatLng(userLat, userLng), { label: '現在地' });
-    ymap.addFeature(userMarker);
+    if (userMarker) userMarker.setLatLng([userLat, userLng]);
 
     if (!navigating || paused || steps.length === 0) return;
 
-    ymap.panTo(new Y.LatLng(userLat, userLng));
+    lmap.panTo([userLat, userLng]);
 
     if (currentStepIndex < steps.length - 1) {
         const next = steps[currentStepIndex + 1];
@@ -397,8 +382,8 @@ function stopNavigation() {
     navigating = false;
     paused = false;
     if (watchId) { navigator.geolocation.clearWatch(watchId); watchId = null; }
-    if (routePolyline) { ymap.removeFeature(routePolyline); routePolyline = null; }
-    if (destMarker) { ymap.removeFeature(destMarker); destMarker = null; }
+    if (routePolyline) { lmap.removeLayer(routePolyline); routePolyline = null; }
+    if (destMarker) { lmap.removeLayer(destMarker); destMarker = null; }
     steps = [];
     stopSigns = [];
     currentStepIndex = 0;
