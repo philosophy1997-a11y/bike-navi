@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <title>バイクナビ</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -146,7 +147,6 @@
             white-space: nowrap;
         }
     </style>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 </head>
 <body>
 
@@ -177,12 +177,11 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 
-// ===== APIキーをここに設定 =====
-const YAHOO_CLIENT_ID = 'dmVyPTIwMjUwNyZpZD1lZElmMmNHZjl3Jmhhc2g9Tm1NeE9URTRaakU0TkdGbE16Y3hNQQ'; // Yahoo!のClient IDに書き換える
-const GRAPHHOPPER_KEY = '85f7b37d-5162-4a2f-891a-04f56bc8909e';
-// ================================
+// ===== APIキー =====
+const API_KEY = '85f7b37d-5162-4a2f-891a-04f56bc8909e';
+// ==================
 
-let lmap, userMarker, destMarker, routePolyline;
+let map, userMarker, destMarker, routeLine;
 let currentCC = 999;
 let watchId = null;
 let steps = [], routePoints = [];
@@ -191,21 +190,23 @@ let userLat = null, userLng = null;
 let navigating = false, paused = false;
 let stopSigns = [];
 
-// Leafletで地図初期化
-lmap = L.map('map', { zoomControl: true }).setView([35.6812, 139.7671], 13);
+// 地図初期化
+map = L.map('map', { zoomControl: true }).setView([35.6812, 139.7671], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© OpenStreetMap contributors', maxZoom: 19
-}).addTo(lmap);
+}).addTo(map);
 
+// 現在地取得
 if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
         pos => {
             userLat = pos.coords.latitude;
             userLng = pos.coords.longitude;
-            lmap.setView([userLat, userLng], 15);
+            map.setView([userLat, userLng], 15);
             userMarker = L.circleMarker([userLat, userLng], {
-                radius: 10, color: '#fff', weight: 3, fillColor: '#e94560', fillOpacity: 1
-            }).addTo(lmap);
+                radius: 10, color: '#fff', weight: 3,
+                fillColor: '#e94560', fillOpacity: 1
+            }).addTo(map);
         },
         () => showToast('現在地の取得に失敗しました。位置情報を許可してください。')
     );
@@ -246,7 +247,7 @@ async function startNavigation() {
             + `&points_encoded=true`
             + `&turn_costs=true`
             + `&ch.disable=true`
-            + `&key=${GRAPHHOPPER_KEY}`;
+            + `&key=${API_KEY}`;
         if (avoid) url += `&avoid=${avoid}`;
 
         const res = await fetch(url);
@@ -269,21 +270,21 @@ async function startNavigation() {
         paused = false;
 
         // ルート描画
-        if (routePolyline) lmap.removeLayer(routePolyline);
-        routePolyline = L.polyline(routePoints, { color: '#e94560', weight: 6, opacity: 0.85 }).addTo(lmap);
+        if (routeLine) map.removeLayer(routeLine);
+        routeLine = L.polyline(routePoints, { color: '#e94560', weight: 6, opacity: 0.85 }).addTo(map);
 
         // 目的地マーカー
-        if (destMarker) lmap.removeLayer(destMarker);
-        destMarker = L.marker([destCoords.lat, destCoords.lng]).addTo(lmap).bindPopup(dest).openPopup();
+        if (destMarker) map.removeLayer(destMarker);
+        destMarker = L.marker([destCoords.lat, destCoords.lng]).addTo(map).bindPopup(dest).openPopup();
 
-        lmap.fitBounds(routePolyline.getBounds(), { padding: [60, 60] });
+        map.fitBounds(routeLine.getBounds(), { padding: [60, 60] });
 
         document.getElementById('instruction').classList.add('show');
         document.getElementById('navBtns').classList.add('show');
         showStep(0);
         speak(steps[0].text);
 
-        // 一時停止標識取得
+        // 止まれ標識取得
         const lats = routePoints.map(p => p[0]);
         const lngs = routePoints.map(p => p[1]);
         fetchStopSigns(Math.min(...lats), Math.min(...lngs), Math.max(...lats), Math.max(...lngs));
@@ -313,12 +314,13 @@ function updatePosition(pos) {
 
     if (!navigating || paused || steps.length === 0) return;
 
-    lmap.panTo([userLat, userLng]);
+    map.panTo([userLat, userLng]);
 
     if (currentStepIndex < steps.length - 1) {
         const next = steps[currentStepIndex + 1];
         const dist = getDistance(userLat, userLng, next.lat, next.lng);
-        document.getElementById('dist').textContent = dist < 1000 ? `${Math.round(dist)}m` : `${(dist / 1000).toFixed(1)}km`;
+        document.getElementById('dist').textContent = dist < 1000
+            ? `${Math.round(dist)}m` : `${(dist / 1000).toFixed(1)}km`;
 
         if (dist < 40) {
             currentStepIndex++;
@@ -327,7 +329,7 @@ function updatePosition(pos) {
         }
     }
 
-    // 一時停止標識チェック
+    // 止まれ標識チェック
     stopSigns.forEach(s => {
         const d = getDistance(userLat, userLng, s.lat, s.lng);
         if (d < 80 && !s.announced) {
@@ -337,7 +339,7 @@ function updatePosition(pos) {
         if (d > 150 && s.announced) s.announced = false;
     });
 
-    // 目的地到着判定
+    // 到着判定
     if (currentStepIndex === steps.length - 1) {
         const last = steps[steps.length - 1];
         if (getDistance(userLat, userLng, last.lat, last.lng) < 30) {
@@ -382,8 +384,8 @@ function stopNavigation() {
     navigating = false;
     paused = false;
     if (watchId) { navigator.geolocation.clearWatch(watchId); watchId = null; }
-    if (routePolyline) { lmap.removeLayer(routePolyline); routePolyline = null; }
-    if (destMarker) { lmap.removeLayer(destMarker); destMarker = null; }
+    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+    if (destMarker) { map.removeLayer(destMarker); destMarker = null; }
     steps = [];
     stopSigns = [];
     currentStepIndex = 0;
@@ -395,16 +397,15 @@ function stopNavigation() {
 }
 
 async function geocode(address) {
-    const url = `https://nominatim.openstreetmap.org/search`
+    const url = `https://graphhopper.com/api/1/geocode`
         + `?q=${encodeURIComponent(address)}`
-        + `&format=json`
-        + `&countrycodes=jp`
+        + `&locale=ja`
         + `&limit=1`
-        + `&accept-language=ja`;
-    const res = await fetch(url, { headers: { 'Accept-Language': 'ja' } });
+        + `&key=${API_KEY}`;
+    const res = await fetch(url);
     const data = await res.json();
-    if (data && data.length > 0) {
-        return { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
+    if (data.hits && data.hits.length > 0) {
+        return { lat: data.hits[0].point.lat, lng: data.hits[0].point.lng };
     }
     throw new Error(`「${address}」が見つかりませんでした`);
 }
@@ -432,7 +433,9 @@ function getDistance(lat1, lng1, lat2, lng2) {
     const R = 6371000;
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLng = (lng2 - lng1) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+    const a = Math.sin(dLat / 2) ** 2
+        + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180)
+        * Math.sin(dLng / 2) ** 2;
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
