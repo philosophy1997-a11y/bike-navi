@@ -395,15 +395,12 @@ function stopNavigation() {
 }
 
 async function geocode(address) {
-    const url = `https://graphhopper.com/api/1/geocode`
-        + `?q=${encodeURIComponent(address)}`
-        + `&locale=ja`
-        + `&limit=1`
-        + `&key=${API_KEY}`;
+    const url = `https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(address)}`;
     const res = await fetch(url);
     const data = await res.json();
-    if (data.hits && data.hits.length > 0) {
-        return { lat: data.hits[0].point.lat, lng: data.hits[0].point.lng };
+    if (data && data.length > 0) {
+        const [lng, lat] = data[0].geometry.coordinates;
+        return { lat, lng };
     }
     throw new Error(`「${address}」が見つかりませんでした`);
 }
