@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>バイクナビ</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: sans-serif;
+            background: #1a1a2e;
+            color: #fff;
+            height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #panel {
+            background: #16213e;
+            padding: 12px;
+            flex-shrink: 0;
+        }
+
+        .cc-row {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+
+        .cc-btn {
+            flex: 1;
+            padding: 8px 4px;
+            border: 2px solid #0f3460;
+            background: #0f3460;
+            color: #aaa;
+            border-radius: 8px;
+            font-size: 12px;
+            cursor: pointer;
+            line-height: 1.4;
+            text-align: center;
+        }
+
+        .cc-btn.active {
+            background: #e94560;
+            border-color: #e94560;
+            color: #fff;
+            font-weight: bold;
+        }
+
+        .search-row {
+            display: flex;
+            gap: 8px;
+        }
+
+        #destination {
+            flex: 1;
+            padding: 12px;
+            border-radius: 8px;
+            border: none;
+            font-size: 16px;
+            background: #0f3460;
+            color: #fff;
+        }
+
+        #destination::placeholder { color: #888; }
+
+        #searchBtn {
+            padding: 12px 20px;
+            background: #e94560;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            min-width: 64px;
+        }
+
+        #searchBtn:disabled {
+            background: #555;
+            cursor: not-allowed;
+        }
+
+        #instruction {
+            display: none;
+            margin-top: 10px;
+            padding: 10px 14px;
+            background: #0f3460;
+            border-radius: 8px;
+            font-size: 15px;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #instruction.show { display: flex; }
+
+        #arrow { font-size: 26px; flex-shrink: 0; }
+
+        #instrText { flex: 1; line-height: 1.4; }
+
+        #dist { font-size: 12px; color: #aaa; flex-shrink: 0; }
+
+        #stopBtn {
+            display: none;
+            width: 100%;
+            margin-top: 8px;
+            padding: 10px;
+            background: #444;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        #map { flex: 1; }
+
+        #toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.8);
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            display: none;
+            z-index: 9999;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+
+<div id="panel">
+    <div class="cc-row">
+        <button class="cc-btn" data-cc="50" onclick="selectCC(this)">〜50cc<br>原付一種</button>
+        <button class="cc-btn" data-cc="125" onclick="selectCC(this)">51〜125cc<br>原付二種</button>
+        <button class="cc-btn active" data-cc="999" onclick="selectCC(this)">126cc〜<br>軽二輪以上</button>
+    </div>
+    <div class="search-row">
+        <input type="text" id="destination" placeholder="目的地を入力（例：渋谷駅）" onkeydown="if(event.key==='Enter') startNavigation()">
+        <button id="searchBtn" onclick="startNavigation()">GO</button>
+    </div>
+    <div id="instruction">
+        <span id="arrow">↑</span>
+        <span id="instrText">案内を開始します</span>
+        <span id="dist"></span>
+    </div>
+    <button id="stopBtn" onclick="stopNavigation()">■ ナビ停止</button>
+</div>
+
+<div id="map"></div>
+<div id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+
+// ===== ここにAPIキーを貼り付けてください =====
+const API_KEY = '85f7b37d-5162-4a2f-891a-04f56bc8909e';
+// =============================================
+
+let map, userMarker, destMarker, routeLine;
+let currentCC = 999;
+let watchId = null;
+let steps = [];
+let routePoints = [];
+let currentStepIndex = 0;
+let userLat = null, userLng = null;
+let navigating = false;
+
+// 地図初期化
+map = L.map('map', { zoomControl: true }).setView([35.6812, 139.7671], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors',
+    maxZoom: 19
+}).addTo(map);
+
+// 現在地取得
+if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+        pos => {
+            userLat = pos.coords.latitude;
+            userLng = pos.coords.longitude;
+            map.setView([userLat, userLng], 15);
+            userMarker = L.circleMarker([userLat, userLng], {
+                radius: 10, color: '#fff', weight: 3,
+                fillColor: '#e94560', fillOpacity: 1
+            }).addTo(map);
+        },
+        () => showToast('現在地の取得に失敗しました。位置情報を許可してください。')
+    );
+} else {
+    showToast('このブラウザは位置情報に対応していません');
+}
+
+function selectCC(btn) {
+    document.querySelectorAll('.cc-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentCC = parseInt(btn.dataset.cc);
+}
+
+function getRouteParams() {
+    if (currentCC <= 125) {
+        return { vehicle: 'car', avoid: 'motorway,trunk' };
+    } else {
+        return { vehicle: 'car', avoid: '' };
+    }
+}
+
+async function startNavigation() {
+    const dest = document.getElementById('destination').value.trim();
+    if (!dest) { showToast('目的地を入力してください'); return; }
+    if (!userLat) { showToast('現在地を取得中です。少し待ってから再試行してください'); return; }
+
+    const btn = document.getElementById('searchBtn');
+    btn.disabled = true;
+    btn.textContent = '…';
+
+    try {
+        // ジオコーディング（住所→座標）
+        const destCoords = await geocode(dest);
+
+        // ルート計算
+        const { vehicle, avoid } = getRouteParams();
+        let url = `https://graphhopper.com/api/1/route`
+            + `?point=${userLat},${userLng}`
+            + `&point=${destCoords.lat},${destCoords.lng}`
+            + `&vehicle=${vehicle}`
+            + `&locale=ja`
+            + `&instructions=true`
+            + `&calc_points=true`
+            + `&points_encoded=true`
+            + `&key=${API_KEY}`;
+        if (avoid) url += `&avoid=${avoid}`;
+
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (!data.paths || data.paths.length === 0) {
+            throw new Error('ルートが見つかりませんでした');
+        }
+
+        const path = data.paths[0];
+        routePoints = decodePolyline(path.points);
+
+        // 各ステップに座標を付与
+        steps = path.instructions.map(step => ({
+            text: step.text,
+            sign: step.sign,
+            lat: routePoints[step.interval[0]][0],
+            lng: routePoints[step.interval[0]][1],
+            distanceToNext: step.distance
+        }));
+
+        currentStepIndex = 0;
+        navigating = true;
+
+        // ルート描画
+        if (routeLine) map.removeLayer(routeLine);
+        routeLine = L.polyline(routePoints, { color: '#e94560', weight: 6, opacity: 0.85 }).addTo(map);
+
+        // 目的地マーカー
+        if (destMarker) map.removeLayer(destMarker);
+        destMarker = L.marker([destCoords.lat, destCoords.lng]).addTo(map).bindPopup(dest).openPopup();
+
+        map.fitBounds(routeLine.getBounds(), { padding: [60, 60] });
+
+        // UI表示
+        document.getElementById('instruction').classList.add('show');
+        document.getElementById('stopBtn').style.display = 'block';
+        showStep(0);
+        speak(steps[0].text);
+
+        // GPS追跡開始
+        if (watchId) navigator.geolocation.clearWatch(watchId);
+        watchId = navigator.geolocation.watchPosition(updatePosition, null, {
+            enableHighAccuracy: true, maximumAge: 2000, timeout: 10000
+        });
+
+        const distKm = (path.distance / 1000).toFixed(1);
+        const timeMin = Math.round(path.time / 60000);
+        showToast(`${distKm}km / 約${timeMin}分`);
+
+    } catch (e) {
+        showToast(e.message || 'エラーが発生しました');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'GO';
+    }
+}
+
+function updatePosition(pos) {
+    userLat = pos.coords.latitude;
+    userLng = pos.coords.longitude;
+
+    if (userMarker) {
+        userMarker.setLatLng([userLat, userLng]);
+    }
+
+    if (!navigating || steps.length === 0) return;
+
+    map.panTo([userLat, userLng]);
+
+    // 次のステップに近づいたら案内を進める
+    if (currentStepIndex < steps.length - 1) {
+        const next = steps[currentStepIndex + 1];
+        const dist = getDistance(userLat, userLng, next.lat, next.lng);
+
+        // 距離表示
+        document.getElementById('dist').textContent = dist < 1000
+            ? `${Math.round(dist)}m`
+            : `${(dist / 1000).toFixed(1)}km`;
+
+        if (dist < 40) {
+            currentStepIndex++;
+            showStep(currentStepIndex);
+            speak(steps[currentStepIndex].text);
+        }
+    }
+
+    // 目的地到着判定
+    if (currentStepIndex === steps.length - 1) {
+        const lastStep = steps[steps.length - 1];
+        const distToGoal = getDistance(userLat, userLng, lastStep.lat, lastStep.lng);
+        if (distToGoal < 30) {
+            speak('目的地に到着しました');
+            showToast('目的地に到着しました');
+            stopNavigation();
+        }
+    }
+}
+
+function showStep(index) {
+    if (index >= steps.length) return;
+    const step = steps[index];
+    document.getElementById('instrText').textContent = step.text;
+    document.getElementById('arrow').textContent = signToArrow(step.sign);
+    document.getElementById('dist').textContent = '';
+}
+
+function signToArrow(sign) {
+    const map = {
+        '-7': '↰', '-3': '↰', '-2': '↖', '-1': '↗',
+        '0': '↑', '1': '↗', '2': '↘', '3': '↱', '4': '↑',
+        '5': '🏁', '6': '↑', '7': '↑'
+    };
+    return map[String(sign)] || '↑';
+}
+
+function stopNavigation() {
+    navigating = false;
+    if (watchId) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+    if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+    if (destMarker) { map.removeLayer(destMarker); destMarker = null; }
+    steps = [];
+    currentStepIndex = 0;
+    document.getElementById('instruction').classList.remove('show');
+    document.getElementById('stopBtn').style.display = 'none';
+    document.getElementById('destination').value = '';
+}
+
+async function geocode(address) {
+    const url = `https://graphhopper.com/api/1/geocode?q=${encodeURIComponent(address)}&locale=ja&limit=1&key=${API_KEY}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.hits && data.hits.length > 0) {
+        return { lat: data.hits[0].point.lat, lng: data.hits[0].point.lng };
+    }
+    throw new Error(`「${address}」が見つかりませんでした`);
+}
+
+function speak(text) {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'ja-JP';
+    u.rate = 0.95;
+    window.speechSynthesis.speak(u);
+}
+
+function getDistance(lat1, lng1, lat2, lng2) {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2
+        + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180)
+        * Math.sin(dLng / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function decodePolyline(encoded) {
+    const pts = [];
+    let i = 0, lat = 0, lng = 0;
+    while (i < encoded.length) {
+        let b, shift = 0, result = 0;
+        do { b = encoded.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+        lat += (result & 1) ? ~(result >> 1) : result >> 1;
+        shift = result = 0;
+        do { b = encoded.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+        lng += (result & 1) ? ~(result >> 1) : result >> 1;
+        pts.push([lat / 1e5, lng / 1e5]);
+    }
+    return pts;
+}
+
+function showToast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.style.display = 'block';
+    clearTimeout(el._timer);
+    el._timer = setTimeout(() => { el.style.display = 'none'; }, 3000);
+}
+
+</script>
+</body>
+</html>
