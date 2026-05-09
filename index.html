@@ -264,7 +264,13 @@ async function startNavigation() {
             rightTurnWarned: false,
         }));
 
+        // 現在地に最も近いステップからスタート
         currentStepIndex = 0;
+        let minSnapDist = Infinity;
+        for (let i = 0; i < steps.length - 1; i++) {
+            const d = getDistance(userLat, userLng, steps[i].lat, steps[i].lng);
+            if (d < minSnapDist) { minSnapDist = d; currentStepIndex = i; }
+        }
         navigating = true;
         paused = false;
 
@@ -280,8 +286,8 @@ async function startNavigation() {
 
         document.getElementById('instruction').classList.add('show');
         document.getElementById('navBtns').classList.add('show');
-        showStep(0);
-        speak(steps[0].text);
+        showStep(currentStepIndex);
+        speak(steps[currentStepIndex].text);
 
         // 止まれ標識取得
         const lats = routePoints.map(p => p[0]);
