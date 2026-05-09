@@ -401,14 +401,25 @@ function stopNavigation() {
 }
 
 async function geocode(address) {
-    let url = `https://graphhopper.com/api/1/geocode?q=${encodeURIComponent(address)}&locale=ja&limit=1&key=${API_KEY}`;
-    if (userLat && userLng) url += `&point=${userLat},${userLng}`;
-    const res = await fetch(url);
-    const data = await res.json();
-    if (data.hits && data.hits.length > 0) {
-        const { lat, lng } = data.hits[0].point;
-        return { lat, lng };
-    }
+    // GraphHopper（駅名・施設名に強い）
+    try {
+        let url = `https://graphhopper.com/api/1/geocode?q=${encodeURIComponent(address)}&locale=ja&limit=1&key=${API_KEY}`;
+        if (userLat && userLng) url += `&point=${userLat},${userLng}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.hits && data.hits.length > 0) return data.hits[0].point;
+    } catch (_) {}
+
+    // 国土地理院（日本の住所に強い）
+    try {
+        const res = await fetch(`https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(address)}`);
+        const data = await res.json();
+        if (data && data.length > 0) {
+            const [lng, lat] = data[0].geometry.coordinates;
+            return { lat, lng };
+        }
+    } catch (_) {}
+
     throw new Error(`「${address}」が見つかりませんでした`);
 }
 
