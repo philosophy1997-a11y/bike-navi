@@ -261,6 +261,7 @@ async function startNavigation() {
             sign: step.sign,
             lat: routePoints[step.interval[0]][0],
             lng: routePoints[step.interval[0]][1],
+            rightTurnWarned: false,
         }));
 
         currentStepIndex = 0;
@@ -320,6 +321,11 @@ function updatePosition(pos) {
         document.getElementById('dist').textContent = dist < 1000
             ? `${Math.round(dist)}m` : `${(dist / 1000).toFixed(1)}km`;
 
+        if (currentCC === 50 && !next.rightTurnWarned && (next.sign === 2 || next.sign === 3) && dist < 100) {
+            next.rightTurnWarned = true;
+            speak('この先、二段階右折の可能性があります');
+        }
+
         if (dist < 40) {
             currentStepIndex++;
             showStep(currentStepIndex);
@@ -330,11 +336,11 @@ function updatePosition(pos) {
     // 止まれ標識チェック
     stopSigns.forEach(s => {
         const d = getDistance(userLat, userLng, s.lat, s.lng);
-        if (d < 80 && !s.announced) {
+        if (d < 30 && !s.announced) {
             s.announced = true;
             speak('この先、一時停止があります');
         }
-        if (d > 150 && s.announced) s.announced = false;
+        if (d > 80 && s.announced) s.announced = false;
     });
 
     // 到着判定
