@@ -401,7 +401,8 @@ function stopNavigation() {
 }
 
 async function geocode(address) {
-    const url = `https://graphhopper.com/api/1/geocode?q=${encodeURIComponent(address)}&locale=ja&limit=1&key=${API_KEY}`;
+    let url = `https://graphhopper.com/api/1/geocode?q=${encodeURIComponent(address)}&locale=ja&limit=1&key=${API_KEY}`;
+    if (userLat && userLng) url += `&point=${userLat},${userLng}`;
     const res = await fetch(url);
     const data = await res.json();
     if (data.hits && data.hits.length > 0) {
