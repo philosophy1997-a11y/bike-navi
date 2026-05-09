@@ -401,26 +401,25 @@ function stopNavigation() {
 }
 
 async function geocode(address) {
-    // GraphHopper（駅名・施設名に強い）
-    try {
-        let url = `https://graphhopper.com/api/1/geocode?q=${encodeURIComponent(address)}&locale=ja&limit=1&key=${API_KEY}`;
-        if (userLat && userLng) url += `&point=${userLat},${userLng}`;
-        const res = await fetch(url);
-        const data = await res.json();
-        if (data.hits && data.hits.length > 0) return data.hits[0].point;
-    } catch (_) {}
+    const [ghResult, gsiResult] = await Promise.allSettled([
+        fetch(`https://graphhopper.com/api/1/geocode?q=${encodeURIComponent(address)}&locale=ja&limit=1&key=${API_KEY}`)
+            .then(r => r.json())
+            .then(d => d.hits?.length > 0 ? d.hits[0].point : null),
+        fetch(`https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(address)}`)
+            .then(r => r.json())
+            .then(d => d?.length > 0 ? { lat: d[0].geometry.coordinates[1], lng: d[0].geometry.coordinates[0] } : null),
+    ]);
 
-    // 国土地理院（日本の住所に強い）
-    try {
-        const res = await fetch(`https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(address)}`);
-        const data = await res.json();
-        if (data && data.length > 0) {
-            const [lng, lat] = data[0].geometry.coordinates;
-            return { lat, lng };
-        }
-    } catch (_) {}
+    const candidates = [ghResult, gsiResult]
+        .filter(r => r.status === 'fulfilled' && r.value)
+        .map(r => r.value);
 
-    throw new Error(`「${address}」が見つかりませんでした`);
+    if (candidates.length === 0) throw new Error(`「${address}」が見つかりませんでした`);
+    if (candidates.length === 1 || !userLat) return candidates[0];
+
+    return candidates.reduce((best, c) =>
+        getDistance(userLat, userLng, c.lat, c.lng) < getDistance(userLat, userLng, best.lat, best.lng) ? c : best
+    );
 }
 
 async function fetchStopSigns(south, west, north, east) {
